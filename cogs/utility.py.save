@@ -1,0 +1,398 @@
+import json
+import requests
+import uwuify
+import random
+import asyncio
+import discord
+import datetime
+import humanize
+import humanfriendly
+import dateutil.parser
+
+from PIL import Image
+from discord.ext import commands
+
+from io import BytesIO
+from typing import Union, Optional, Any
+
+from shazamio import Shazam
+from ttapi import TikTokApi
+
+from tools.bot import Pretend
+from tools.misc.views import Donate
+from tools.validators import ValidTime
+from tools.helpers import PretendContext
+from tools.predicates import is_afk, is_there_a_reminder, reminder_exists
+from tools.misc.utils import (
+    Timezone,
+    BdayDate,
+    BdayMember,
+    TimezoneMember,
+    TimezoneLocation,
+)
+
+from tools.handlers.socials.ebio import EbioUser
+from tools.handlers.socials.github import GithubUser
+from tools.handlers.socials.snapchat import SnapUser
+from tools.handlers.socials.roblox import RobloxUser
+from tools.handlers.socials.tiktok import TikTokUser
+from tools.handlers.socials.cashapp import CashappUser
+from tools.handlers.socials.weather import WeatherLocation
+from tools.handlers.socials.instagram import InstagramUser
+
+from deep_translator import GoogleTranslator
+from deep_translator.exceptions import LanguageNotSupportedException
+from PIL import Image
+from functools import partial, wraps
+from io import BytesIO
+from math import sqrt
+from typing import Union, List
+import aiohttp
+
+
+
+def async_executor():
+    def outer(func):
+        @wraps(func)
+        def inner(*args, **kwargs):
+            task = partial(func, *args, **kwargs)
+            return asyncio.get_event_loop().run_in_executor(None, task)
+
+        return inner
+
+    return outer
+
+
+
+@async_executor()
+def _collage_open(image: BytesIO):
+    image = (
+        Image.open(image)
+        .convert("RGBA")
+        .resize(
+            (
+                256,
+                256,
+            )
+        )
+    )
+    return image
+
+
+async def _collage_read(image: str):
+    async with aiohttp.ClientSession() as session:
+        async with session.get(image) as response:
+            try:
+                return await _collage_open(BytesIO(await response.read()))
+            except:
+                return None
+
+
+async def _collage_paste(image: Image, x: int, y: int, background: Image):
+    background.paste(
+        image,
+        (
+            x * 256,
+            y * 256,
+        ),
+    )
+
+
+async def collage(images: List[str]):
+    tasks = list()
+    for image in images:
+        tasks.append(_collage_read(image))
+
+    images = [image for image in await asyncio.gather(*tasks) if image]
+    if not images:
+        return None
+
+    rows = int(sqrt(len(images)))
+    columns = (len(images) + rows - 1) // rows
+
+    background = Image.new(
+        "RGBA",
+        (
+            columns * 256,
+            rows * 256,
+        ),
+    )
+    tasks = list()
+    for i, image in enumerate(images):
+        tasks.append(_collage_paste(image, i % columns, i // columns, background))
+    await asyncio.gather(*tasks)
+
+    buffer = BytesIO()
+    background.save(
+        buffer,
+        format="png",
+    )
+    buffer.seek(0)
+
+    background.close()
+    for image in images:
+        image.close()
+
+    return discord.File(
+        buffer,
+        filename="collage.png",
+    )
+
+
+class Utility(commands.Cog):
+    def __init__(self, bot: Pretend):
+        self.bot = bot
+        self.tz = Timezone(bot)
+        self.description = "Utility commands"
+        self.tiktok = TikTokApi(debug=True)
+        self.afk_cd = commands.CooldownMapping.from_cooldown(
+            3, 3, commands.BucketType.channel
+        )
+
+    async def get_expiration(self, url: str):
+        async with aiohttp.ClientSession() as session:
+            async with session.request('HEAD', url) as req:
+                date = req.headers['Set-Cookie'].split('expires=')[1].split(';')[0]
+        if datetime.datetime.now(pytz.timezone('US/Eastern')).timestamp() >= datetime.datetime.strptime(date,'%a, %d-%b-%y %H:%M:%S %Z').timestamp():
+            if messag
+
+    async def fetch_avatars(self, user_id: int):
+        for avatar, i, message_id in await self.bot.db.fetch('SELECT avatar, i, message_id FROM avatars WHERE user_id = $1', ctx.author.id):
+            
+
+    def human_format(self, number: int) -> str:
+        """
+        Humanize a number, if the case
+        """
+
+        if number > 999:
+            return humanize.naturalsize(number, False, True)
+
+        return number.__str__()
+
+    def afk_ratelimit(self, message: discord.Message) -> Optional[int]:
+        """
+        Cooldown for the afk message event
+        """
+
+        bucket = self.afk_cd.get_bucket(message)
+        return bucket.update_rate_limit()
+
+    async def cache_profile(self, member: discord.User) -> Any:
+        """
+        Cache someone's banner
+        """
+
+        if member.banner:
+            banner = member.banner.url
+        else:
+            banner = None
+
+        return await self.bot.cache.set(
+            f"profile-{member.id}", {"banner": banner}, 3600
+        )
+
+    def get_joined_date(self, date) -> str:
+        if date.month < 10:
+            month = (self.tz.months.get(date.month))[:3]
+        else:
+            month = (self.tz.months.get(date.month))[:3]
+
+        return f"Joined {month} {date.day} {str(date.year)}"
+
+    @commands.Cog.listener("on_message")
+    async def seen_listener(self, message: discord.Message):
+        if message.author.bot:
+            return
+
+        check = await self.bot.db.fetchrow(
+            """
+      SELECT * FROM seen
+      WHERE user_id = $1
+      AND guild_id = $2
+      """,
+            message.author.id,
+            message.guild.id,
+        )
+        args = [message.author.id, message.guild.id, datetime.datetime.now()]
+
+        if not check:
+            await self.bot.db.execute("INSERT INTO seen VALUES ($1,$2,$3)", *args)
+        else:
+            await self.bot.db.execute(
+                "UPDATE seen SET time = $3 WHERE user_id = $1 AND guild_id = $2", *args
+            )
+
+    @commands.Cog.listener("on_message")
+    async def afk_listener(self, message: discord.Message):
+        if message.is_system():
+            return
+
+        if not message.guild:
+            return
+
+        if not message.author:
+            return
+
+        if message.author.bot:
+            return
+
+        if check := await self.bot.db.fetchrow(
+            "SELECT * FROM afk WHERE guild_id = $1 AND user_id = $2",
+            message.guild.id,
+            message.author.id,
+        ):
+            ctx = await self.bot.get_context(message)
+            time = check["time"]
+            await self.bot.db.execute(
+                "DELETE FROM afk WHERE guild_id = $1 AND user_id = $2",
+                message.guild.id,
+                message.author.id,
+            )
+            embed = discord.Embed(
+                color=self.bot.color,
+                description=f"👋 {ctx.author.mention}: Welcome back! You were gone for **{humanize.precisedelta(datetime.datetime.fromtimestamp(time.timestamp()), format='%0.0f')}**",
+            )
+            return await ctx.send(embed=embed)
+
+        for mention in message.mentions:
+            check = await self.bot.db.fetchrow(
+                "SELECT * FROM afk WHERE guild_id = $1 AND user_id = $2",
+                message.guild.id,
+                mention.id,
+            )
+            if check:
+                if self.afk_ratelimit(message):
+                    continue
+
+                ctx = await self.bot.get_context(message)
+                time = check["time"]
+                embed = discord.Embed(
+                    color=self.bot.color,
+                    description=f"👋 {ctx.author.mention}: **{mention.name}** is **AFK** for **{humanize.precisedelta(datetime.datetime.fromtimestamp(time.timestamp()), format='%0.0f')}** - {check['reason']}",
+                )
+                return await ctx.send(embed=embed)
+
+    @commands.Cog.listener()
+    async def on_user_update(self, betimestamp():
+            if messag
+
+    async def fetch_avatars(self, user_id: int):
+        for avatar, i, message_id in await self.bot.db.fetch('SELECT avatar, i, message_id FROM avatars WHERE user_id = $1', ctx.author.id):
+            
+
+    def human_format(self, number: int) -> str:
+        """
+        Humanize a number, if the case
+        """
+
+        if number > 999:
+            return humanize.naturalsize(number, False, True)
+
+        return number.__str__()
+
+    def afk_ratelimit(self, message: discord.Message) -> Optional[int]:
+        """
+        Cooldown for the afk message event
+        """
+
+        bucket = self.afk_cd.get_bucket(message)
+        return bucket.update_rate_limit()
+
+    async def cache_profile(self, member: discord.User) -> Any:
+        """
+        Cache someone's banner
+        """
+
+        if member.banner:
+            banner = member.banner.url
+        else:
+            banner = None
+
+        return await self.bot.cache.set(
+            f"profile-{member.id}", {"banner": banner}, 3600
+        )
+
+    def get_joined_date(self, date) -> str:
+        if date.month < 10:
+            month = (self.tz.months.get(date.month))[:3]
+        else:
+            month = (self.tz.months.get(date.month))[:3]
+
+        return f"Joined {month} {date.day} {str(date.year)}"
+
+    @commands.Cog.listener("on_message")
+    async def seen_listener(self, message: discord.Message):
+        if message.author.bot:
+            return
+
+        check = await self.bot.db.fetchrow(
+            """
+      SELECT * FROM seen
+      WHERE user_id = $1
+      AND guild_id = $2
+      """,
+            message.author.id,
+            message.guild.id,
+        )
+        args = [message.author.id, message.guild.id, datetime.datetime.now()]
+
+        if not check:
+            await self.bot.db.execute("INSERT INTO seen VALUES ($1,$2,$3)", *args)
+        else:
+            await self.bot.db.execute(
+                "UPDATE seen SET time = $3 WHERE user_id = $1 AND guild_id = $2", *args
+            )
+
+    @commands.Cog.listener("on_message")
+    async def afk_listener(self, message: discord.Message):
+        if message.is_system():
+            return
+
+        if not message.guild:
+            return
+
+        if not message.author:
+            return
+
+        if message.author.bot:
+            return
+
+        if check := await self.bot.db.fetchrow(
+            "SELECT * FROM afk WHERE guild_id = $1 AND user_id = $2",
+            message.guild.id,
+            message.author.id,
+        ):
+            ctx = await self.bot.get_context(message)
+            time = check["time"]
+            await self.bot.db.execute(
+                "DELETE FROM afk WHERE guild_id = $1 AND user_id = $2",
+                message.guild.id,
+                message.author.id,
+            )
+            embed = discord.Embed(
+                color=self.bot.color,
+                description=f"👋 {ctx.author.mention}: Welcome back! You were gone for **{humanize.precisedelta(datetime.datetime.fromtimestamp(time.timestamp()), format='%0.0f')}**",
+            )
+            return await ctx.send(embed=embed)
+
+        for mention in message.mentions:
+            check = await self.bot.db.fetchrow(
+                "SELECT * FROM afk WHERE guild_id = $1 AND user_id = $2",
+                message.guild.id,
+                mention.id,
+            )
+            if check:
+                if self.afk_ratelimit(message):
+                    continue
+
+                ctx = await self.bot.get_context(message)
+                time = check["time"]
+                embed = discord.Embed(
+                    color=self.bot.color,
+                    description=f"👋 {ctx.author.mention}: **{mention.name}** is **AFK** for **{humanize.precisedelta(datetime.datetime.fromtimestamp(time.timestamp()), format='%0.0f')}** - {check['reason']}",
+                )
+                return await ctx.send(embed=embed)
+
+    @commands.Cog.listener()
+    async def on_user_update(self, be
